@@ -7,11 +7,14 @@ import {
   FileText,
   Gauge,
   Images,
-  Layers,
   Loader2,
   RotateCcw,
   Sparkles,
   Wand2,
+  CheckSquare,
+  Square,
+  X,
+  Layers,
 } from "lucide-react";
 import UploadDropzone from "./components/UploadDropzone";
 import PageThumb from "./components/PageThumb";
@@ -56,10 +59,39 @@ export default function App() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [isZipping, setIsZipping] = useState(false);
   const [isBuildingPdf, setIsBuildingPdf] = useState(false);
+  const [selectedPages, setSelectedPages] = useState<Set<number>>(new Set());
   const cancelRef = useRef(false);
 
   const baseName = useMemo(() => (file ? sanitizeFileName(file.name) : "document"), [file]);
   const extension = format === "png" ? "png" : "jpg";
+
+  // Selection handlers
+  const toggleSelectPage = useCallback((pageNumber: number) => {
+    setSelectedPages((prev) => {
+      const newSet = new Set(prev);
+      if (newSet.has(pageNumber)) {
+        newSet.delete(pageNumber);
+      } else {
+        newSet.add(pageNumber);
+      }
+      return newSet;
+    });
+  }, []);
+
+  const selectAllPages = useCallback(() => {
+    setSelectedPages((prev) => {
+      const allPages = new Set<number>();
+      pages.forEach((p) => allPages.add(p.pageNumber));
+      return allPages;
+    });
+  }, [pages]);
+
+  const deselectAllPages = useCallback(() => {
+    setSelectedPages(new Set());
+  }, []);
+
+  const isAllSelected = selectedPages.size > 0 && selectedPages.size === pages.length;
+  const isSomeSelected = selectedPages.size > 0 && selectedPages.size < pages.length;
 
   const resetAll = useCallback(() => {
     cancelRef.current = true;
@@ -68,6 +100,7 @@ export default function App() {
     setPdfDoc(null);
     setNumPages(0);
     setPages([]);
+    setSelectedPages(new Set());
     setProgress({ current: 0, total: 0 });
     setErrorMsg(null);
   }, []);
@@ -83,6 +116,7 @@ export default function App() {
     setStatus("loading");
     setFile(selected);
     setPages([]);
+    setSelectedPages(new Set());
 
     try {
       const doc = await loadPdfDocument(selected);
@@ -103,6 +137,7 @@ export default function App() {
     cancelRef.current = false;
     setStatus("converting");
     setPages([]);
+    setSelectedPages(new Set());
     setProgress({ current: 0, total: numPages });
 
     const results: ConvertedPage[] = [];
@@ -127,33 +162,55 @@ export default function App() {
 
   const handleDownloadZip = useCallback(async () => {
     if (!pages.length) return;
+    const pagesToDownload = selectedPages.size > 0
+      ? pages.filter((p) => selectedPages.has(p.pageNumber))
+      : pages;
+    
+    if (!pagesToDownload.length) {
+      setErrorMsg("الرجاء اختيار صفحات على الأقل لتحميلها");
+      return;
+    }
+    
     setIsZipping(true);
     try {
-      const blob = await buildImagesZip(pages, format, baseName);
-      triggerBlobDownload(blob, `${baseName}-صور.zip`);
+      const blob = await buildImagesZip(pagesToDownload, format, baseName);
+      triggerBlobDownload(blob, `${baseName}-صور${selectedPages.size > 0 && selectedPages.size < pages.length ? "-مختارة" : ""}.zip`);
     } catch (err) {
       console.error(err);
       setErrorMsg("حدث خطأ أثناء إنشاء ملف ZIP. حاول مرة أخرى.");
     } finally {
       setIsZipping(false);
     }
-  }, [pages, format, baseName]);
+  }, [pages, format, baseName, selectedPages]);
 
   const handleDownloadCombinedPdf = useCallback(async () => {
     if (!pages.length) return;
+    const pagesToDownload = selectedPages.size > 0
+      ? pages.filter((p) => selectedPages.has(p.pageNumber))
+      : pages;
+    
+    if (!pagesToDownload.length) {
+      setErrorMsg("الرجاء اختيار صفحات على الأقل لتجميعها");
+      return;
+    }
+    
     setIsBuildingPdf(true);
     try {
-      const blob = await buildCombinedPdf(pages, format);
-      triggerBlobDownload(blob, `${baseName}-مجمّع.pdf`);
+      const blob = await buildCombinedPdf(pagesToDownload, format);
+      triggerBlobDownload(blob, `${baseName}-مجمّع${selectedPages.size > 0 && selectedPages.size < pages.length ? "-مختارة" : ""}.pdf`);
     } catch (err) {
       console.error(err);
       setErrorMsg("حدث خطأ أثناء تجميع ملف PDF. حاول مرة أخرى.");
     } finally {
       setIsBuildingPdf(false);
     }
-  }, [pages, format, baseName]);
+  }, [pages, format, baseName, selectedPages]);
 
   const totalOutputBytes = useMemo(() => pages.reduce((sum, p) => sum + p.sizeBytes, 0), [pages]);
+  const selectedOutputBytes = useMemo(
+    () => pages.filter((p) => selectedPages.has(p.pageNumber)).reduce((sum, p) => sum + p.sizeBytes, 0),
+    [pages, selectedPages]
+  );
   const progressPct = progress.total ? Math.round((progress.current / progress.total) * 100) : 0;
   const isBusy = status === "loading" || status === "converting";
 
@@ -360,7 +417,7 @@ export default function App() {
                       className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-4 py-2 text-xs font-bold text-white shadow-sm transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       {isZipping ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Archive className="h-3.5 w-3.5" />}
-                      تحميل كل الصور (ZIP)
+                      تحميل الصور (ZIP)
                     </button>
                     <button
                       onClick={handleDownloadCombinedPdf}
@@ -377,13 +434,58 @@ export default function App() {
                   </div>
                 </div>
 
+                {/* Selection Controls */}
+                {status === "done" && (
+                  <div className="flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+                    <div className="flex items-center gap-2 text-sm font-bold text-slate-700">
+                      {selectedPages.size > 0 ? (
+                        <>
+                          <CheckSquare className="h-4 w-4 text-emerald-600" />
+                          تم اختيار {selectedPages.size} صورة
+                          {selectedPages.size < pages.length && ` من أصل ${pages.length}`}
+                          — الحجم {formatBytes(selectedOutputBytes)}
+                        </>
+                      ) : (
+                        <>
+                          <Square className="h-4 w-4 text-slate-400" />
+                          لم يتم اختيار أي صورة
+                        </>
+                      )}
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {selectedPages.size > 0 && (
+                        <button
+                          onClick={deselectAllPages}
+                          className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 shadow-sm transition-colors hover:bg-slate-50"
+                        >
+                          <X className="h-3 w-3" />
+                          إلغاء الاختيار
+                        </button>
+                      )}
+                       <button
+                         onClick={isAllSelected ? deselectAllPages : selectAllPages}
+                         className="inline-flex items-center gap-1 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700 shadow-sm transition-colors hover:bg-emerald-100"
+                       >
+                         {isAllSelected ? "إلغاء تحديد الكل" : "اختيار الكل"}
+                       </button>
+                    </div>
+                  </div>
+                )}
+
                 <div className="mb-1 flex items-center gap-2 text-sm font-bold text-slate-700">
                   <Images className="h-4 w-4 text-slate-500" />
                   معاينة الصفحات
                 </div>
                 <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4">
                   {pages.map((p) => (
-                    <PageThumb key={p.pageNumber} page={p} baseName={baseName} extension={extension} />
+                    <PageThumb
+                      key={p.pageNumber}
+                      page={p}
+                      baseName={baseName}
+                      extension={extension}
+                      isSelected={selectedPages.has(p.pageNumber)}
+                      onToggleSelect={() => toggleSelectPage(p.pageNumber)}
+                    />
                   ))}
                 </div>
               </div>
